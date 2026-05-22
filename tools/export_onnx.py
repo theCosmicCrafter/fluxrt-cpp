@@ -119,6 +119,7 @@ def export_transformer(
     height: int,
     width: int,
     batch_size: int = 1,
+    fixed_shapes: bool = False,
 ) -> None:
     """Export the FLUX.2-Klein transformer to ONNX with dynamic axes."""
     device = "cpu"  # CPU export; RTX 5090 sm_120 not supported by current torch
@@ -141,13 +142,24 @@ def export_transformer(
     input_names = [k for k, v in inputs.items() if v is not None]
 
     # Dynamic axes for batch, image sequence, and text sequence
-    dynamic_axes = {
-        "hidden_states": {0: "batch", 1: "img_seq_len"},
-        "encoder_hidden_states": {0: "batch", 1: "txt_seq_len"},
-        "timestep": {0: "batch"},
-        "img_ids": {0: "batch", 1: "img_seq_len"},
-        "txt_ids": {0: "batch", 1: "txt_seq_len"},
-    }
+    if fixed_shapes:
+        # NVIDIA-style fixed-sequence export (avoids shape-dependent reshape issues)
+        dynamic_axes = {
+            "hidden_states": {0: "batch"},
+            "encoder_hidden_states": {0: "batch"},
+            "timestep": {0: "batch"},
+            "img_ids": {0: "batch"},
+            "txt_ids": {0: "batch"},
+        }
+        print("\n[export] Fixed-shape export (seq_len not dynamic) — TensorRT compatible")
+    else:
+        dynamic_axes = {
+            "hidden_states": {0: "batch", 1: "img_seq_len"},
+            "encoder_hidden_states": {0: "batch", 1: "txt_seq_len"},
+            "timestep": {0: "batch"},
+            "img_ids": {0: "batch", 1: "img_seq_len"},
+            "txt_ids": {0: "batch", 1: "txt_seq_len"},
+        }
     if cfg.guidance_embeds:
         dynamic_axes["guidance"] = {0: "batch"}
 
@@ -202,6 +214,8 @@ def main() -> int:
     parser.add_argument("--height", type=int, default=512)
     parser.add_argument("--width", type=int, default=512)
     parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--fixed-shapes", action="store_true",
+                        help="Disable dynamic axes (needed for TensorRT build)")
     args = parser.parse_args()
 
     # Derive latent spatial dimensions from pixel dimensions.
@@ -216,6 +230,7 @@ def main() -> int:
     export_transformer(
         args.checkpoint, args.config, out,
         height=latent_h, width=latent_w, batch_size=args.batch_size,
+        fixed_shapes=args.fixed_shapes,
     )
     return 0
 
