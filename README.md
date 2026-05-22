@@ -6,10 +6,15 @@ NVIDIA RTX 4090 / 5090.
 
 **Repo:** https://github.com/theCosmicCrafter/fluxrt-cpp
 
-**Target model:** [FLUX.2-klein-AIO](https://civitai.com/models/2327389/flux2-klein-aio)
-— a 4–6-step distilled, all-in-one (transformer + VAE + text encoder bundled),
-Apache-2.0 licensed FLUX.2-Klein 4B variant. The distillation is critical for
-our real-time goals: ~5× fewer denoising steps than base Klein.
+**Target model:** [FLUX.2-Klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B)
+(base, FP16 single-file `flux-2-klein-4b.safetensors`, ~7.2 GB).
+
+**Phase 5+ optimization candidates:**
+- [FLUX.2-Klein-AIO](https://civitai.com/models/2327389/flux2-klein-aio) —
+  4–6-step distilled, Apache-2.0. Could yield 5× speedup once we're confident
+  the C++ pipeline matches base Klein numerics.
+- NVFP4 quantization via NVIDIA Model-Optimizer (Blackwell-native, hardware-
+  accelerated FP4 tensor cores).
 
 > **Status:** Phase 0 (de-risking spike). Not yet usable. See `specs/` for
 > phase plans and `BLOCKED.md` for current dependencies.

@@ -10,26 +10,13 @@ This file tracks anything Cascade cannot do alone. Updated proactively.
 
 ### P0 — Required to start Phase 0 work
 
-- [ ] **CivitAI account + API key for AIO model download** *(date: 2026-05-22)*
-      Status: Required after pivot to FLUX.2-klein-AIO (a CivitAI-only model).
-      Action needed:
-      1. Create / sign in at https://civitai.com (will redirect to civitai.red
-         since AIO is on the mature-content domain).
-      2. Generate an API key at
-         https://civitai.com/user/account (API Keys section).
-      3. Download `flux2-klein-aio` (single .safetensors, ~16 GB BF16 expected
-         for v1, or 7.9 GB for FP8 distill variant) from
-         https://civitai.com/models/2327389 to `models/aio/`.
-      4. Provide the API key to Cascade so `tools/download_aio.py` can pull
-         updates if the upstream version changes.
-      Workaround: Manual browser download is fine for the one-time grab.
-
-- [ ] **Hugging Face authentication (still needed for diffusers code)**
-      *(date: 2026-05-22)*
-      Action needed: `huggingface-cli login` with a read-scope token. We pull
-      the FLUX.2-Klein **diffusers code** (Python module) from HF even though
-      the AIO weights come from CivitAI. The base model on HF is also useful
-      as a known-good reference for parity tests.
+- [x] **Hugging Face configs for FLUX.2-klein-4B** *(resolved: 2026-05-22)*
+      The base Klein-4B repo is **public** (Apache-2.0). Downloaded all
+      configs + tokenizer without auth via huggingface-hub Python API:
+      `snapshot_download(..., allow_patterns=["*.json", "tokenizer*"])`.
+      Result: 19 files in `models/base-config/` including `model_index.json`,
+      `scheduler/scheduler_config.json`, tokenizer vocab files, and
+      component configs for transformer, vae, and text_encoder.
 
 ### P2 — Required before Phase 5 (Quantization)
 
@@ -60,6 +47,16 @@ This file tracks anything Cascade cannot do alone. Updated proactively.
 - [x] **GitHub repo creation + initial push** *(resolved: 2026-05-22)*
       Repo at https://github.com/theCosmicCrafter/fluxrt-cpp.
       Initial commit `361c13a6` pushed to `main`.
+
+- [x] **Base FLUX.2-Klein-4B weights** *(resolved: 2026-05-22)*
+      User provided `flux-2-klein-4b.safetensors` (7.22 GB FP16) directly.
+      Now at `models/base/flux-2-klein-4b.safetensors`.
+
+- [x] **Brief AIO pivot, then back to base Klein** *(resolved: 2026-05-22)*
+      Briefly considered FLUX.2-klein-AIO (4–6 step distilled, Apache 2.0)
+      and SDNQ-4bit-dynamic variants. Decided to start with base Klein-4B
+      for clean precision. AIO + NVFP4 documented as Phase 5+ optimizations
+      in `specs/phase-0-spike/plan.md`.
 
 ---
 

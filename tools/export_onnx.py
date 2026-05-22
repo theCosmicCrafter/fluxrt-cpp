@@ -1,23 +1,25 @@
 """
-Export FLUX.2-klein-AIO model components to ONNX.
+Export FLUX.2-Klein single-file checkpoint components to ONNX.
 
 This script is a build-time tool only (Constitution Article III).
 It runs in the Python environment of the upstream FluxRT repo.
 
+Works with either:
+- Base `flux-2-klein-4b.safetensors` from black-forest-labs/FLUX.2-klein-4B
+- Distilled AIO `flux2-klein-aio.safetensors` from CivitAI #2327389
+
+Both use the standard `Flux2KleinPipeline.from_single_file()` loader.
+
 Usage:
     # From a conda env with FluxRT + diffusers installed
     python tools/export_onnx.py \\
-        --aio-checkpoint ../models/aio/flux2-klein-aio.safetensors \\
+        --checkpoint models/base/flux-2-klein-4b.safetensors \\
         --output-dir engines/onnx \\
         --resolution 512 512 \\
         --component transformer
 
-The AIO model bundles transformer + VAE + text encoder in one .safetensors.
-We load it via diffusers `Flux2KleinPipeline.from_single_file()` and then
-export the requested component.
-
 Components:
-    transformer  - main 4B FLUX.2 DiT transformer (largest, ~7-8 GB ONNX, BF16)
+    transformer  - main 4B FLUX.2 DiT transformer (largest, ~7-8 GB ONNX)
     vae          - autoencoder decoder (small, ~150 MB ONNX)
     text_encoder - Qwen3 text encoder (large, ~3 GB ONNX)
 
@@ -31,11 +33,14 @@ import sys
 from pathlib import Path
 
 
-def _load_aio_pipeline(checkpoint: Path, dtype):
-    """Load the AIO single-file checkpoint into a Flux2KleinPipeline.
+def _load_klein_pipeline(checkpoint: Path, dtype):
+    """Load a FLUX.2-Klein single-file checkpoint into a Flux2KleinPipeline.
+
+    Works for both base Klein (`flux-2-klein-4b.safetensors`) and AIO
+    distillation single-file checkpoints.
 
     Args:
-        checkpoint: Path to the .safetensors file from CivitAI.
+        checkpoint: Path to the .safetensors file.
         dtype: torch dtype for inference.
 
     Returns:
@@ -44,11 +49,13 @@ def _load_aio_pipeline(checkpoint: Path, dtype):
     import torch  # noqa: F401, PLC0415  (used by caller via dtype)
     from diffusers import Flux2KleinPipeline  # noqa: PLC0415
 
-    print(f"[export_onnx] Loading AIO pipeline from {checkpoint}...")
+    print(f"[export_onnx] Loading Klein pipeline from {checkpoint}...")
     if not checkpoint.exists():
         raise FileNotFoundError(
-            f"AIO checkpoint not found: {checkpoint}. "
-            f"Run tools/download_aio.py to fetch it from CivitAI."
+            f"Checkpoint not found: {checkpoint}. "
+            f"Place a FLUX.2-Klein single-file safetensors there. For the base "
+            f"Klein-4B, download from "
+            f"https://huggingface.co/black-forest-labs/FLUX.2-klein-4B."
         )
 
     pipeline = Flux2KleinPipeline.from_single_file(
@@ -60,8 +67,8 @@ def _load_aio_pipeline(checkpoint: Path, dtype):
     for attr in ("transformer", "vae", "text_encoder"):
         if not hasattr(pipeline, attr) or getattr(pipeline, attr) is None:
             raise RuntimeError(
-                f"AIO pipeline missing component '{attr}'. "
-                f"This means from_single_file() failed to decompose the AIO "
+                f"Pipeline missing component '{attr}'. "
+                f"This means from_single_file() failed to decompose the "
                 f"checkpoint. Check diffusers version (need recent enough "
                 f"to know about FLUX.2-Klein) and the checkpoint file."
             )
@@ -70,28 +77,28 @@ def _load_aio_pipeline(checkpoint: Path, dtype):
 
 
 def export_transformer(
-    aio_checkpoint: Path,
+    checkpoint: Path,
     output_path: Path,
     height: int,
     width: int,
     fp16: bool = True,
 ) -> None:
-    """Export the FLUX.2-klein-AIO transformer to ONNX.
+    """Export the FLUX.2-Klein transformer to ONNX.
 
     Phase 0 spike: fixed batch=1, fixed resolution. No dynamic shapes.
 
     Args:
-        aio_checkpoint: Path to AIO single-file .safetensors from CivitAI.
+        checkpoint: Path to a FLUX.2-Klein single-file .safetensors
+                    (base or AIO).
         output_path: Path to write the ONNX file.
         height: Input image height in pixels.
         width: Input image width in pixels.
-        fp16: Whether to export in float16. AIO is natively BF16 so we may
-              prefer keeping BF16; FP16 conversion can lose precision.
+        fp16: Whether to export in float16 (default). Set to False for bf16.
     """
     import torch  # noqa: PLC0415
 
     dtype = torch.float16 if fp16 else torch.bfloat16
-    pipeline = _load_aio_pipeline(aio_checkpoint, dtype)
+    pipeline = _load_klein_pipeline(checkpoint, dtype)
     transformer = pipeline.transformer.eval()
 
     # FLUX.2 latent has 16 channels, downsamples 8x from pixel space.
@@ -172,8 +179,10 @@ def export_text_encoder(*args, **kwargs):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--aio-checkpoint", type=Path, required=True,
-        help="Path to FLUX.2-klein-AIO single-file .safetensors from CivitAI.",
+        "--checkpoint", type=Path,
+        default=Path("models/base/flux-2-klein-4b.safetensors"),
+        help="Path to FLUX.2-Klein single-file .safetensors (base or AIO). "
+             "Default: models/base/flux-2-klein-4b.safetensors",
     )
     parser.add_argument(
         "--output-dir", type=Path, default=Path("engines/onnx"),
@@ -197,15 +206,18 @@ def main() -> int:
     fp16 = not args.bf16
     suffix = "fp16" if fp16 else "bf16"
 
+    # Derive output filename stem from checkpoint stem (e.g. "flux-2-klein-4b").
+    stem = args.checkpoint.stem.replace("-", "_").replace(".", "_")
+
     if args.component == "transformer":
-        out = args.output_dir / f"flux2_aio_transformer_{height}x{width}_{suffix}.onnx"
-        export_transformer(args.aio_checkpoint, out, height, width, fp16=fp16)
+        out = args.output_dir / f"{stem}_transformer_{height}x{width}_{suffix}.onnx"
+        export_transformer(args.checkpoint, out, height, width, fp16=fp16)
     elif args.component == "vae":
-        out = args.output_dir / f"flux2_aio_vae_{height}x{width}.onnx"
-        export_vae(args.aio_checkpoint, out, height, width)
+        out = args.output_dir / f"{stem}_vae_{height}x{width}.onnx"
+        export_vae(args.checkpoint, out, height, width)
     elif args.component == "text_encoder":
-        out = args.output_dir / "flux2_aio_text_encoder.onnx"
-        export_text_encoder(args.aio_checkpoint, out)
+        out = args.output_dir / f"{stem}_text_encoder.onnx"
+        export_text_encoder(args.checkpoint, out)
     else:
         print(f"unknown component: {args.component}", file=sys.stderr)
         return 1
