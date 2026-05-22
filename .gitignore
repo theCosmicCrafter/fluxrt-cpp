@@ -1,0 +1,62 @@
+# Build artifacts
+build/
+out/
+cmake-build-*/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# vcpkg
+vcpkg_installed/
+
+# Compiled engines (huge, regenerate from ONNX)
+engines/*.plan
+engines/*.engine
+engines/*.cache
+!engines/.gitkeep
+
+# ONNX intermediates
+*.onnx
+*.onnx_data
+!tools/**/*.onnx_template
+
+# Model weights (download separately)
+FLUX.2-klein-4B/
+FLUX.2-klein-4B-int8/
+RIFE-safetensors/
+LivePortrait/
+LivePortrait-code/
+
+# Python (build-time tool only)
+__pycache__/
+*.pyc
+.venv/
+venv/
+.uv/
+*.egg-info/
+
+# Calibration data (large, regenerate if needed)
+calibration_data/
+tests/fixtures/*.bin
+tests/fixtures/*.npy
+tests/fixtures/*.pt
+!tests/fixtures/.gitkeep
+!tests/fixtures/README.md
+
+# OS / editor
+Thumbs.db
+.DS_Store
+*.swp
+*.swo
+
+# Profiling outputs
+*.nsys-rep
+*.ncu-rep
+*.qdrep
+profile/
+
+# Logs
+logs/
+*.log

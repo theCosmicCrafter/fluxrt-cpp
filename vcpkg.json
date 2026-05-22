@@ -1,0 +1,66 @@
+{
+  "name": "fluxrt-cpp",
+  "version-string": "0.1.0-phase0",
+  "description": "Real-time FLUX.2 stream editing in C++ with TensorRT",
+  "homepage": "https://github.com/richk/FluxRT-CPP",
+  "license": "Apache-2.0",
+  "supports": "(windows | linux) & x64",
+  "dependencies": [
+    {
+      "name": "nlohmann-json",
+      "version>=": "3.11.3"
+    },
+    {
+      "name": "fmt",
+      "version>=": "10.2.1"
+    },
+    {
+      "name": "spdlog",
+      "version>=": "1.14.1"
+    },
+    {
+      "name": "catch2",
+      "version>=": "3.5.4"
+    },
+    {
+      "name": "stb",
+      "version>=": "2024-07-29"
+    },
+    {
+      "name": "opencv4",
+      "default-features": false,
+      "features": [
+        "core",
+        "imgcodecs",
+        "videoio"
+      ],
+      "version>=": "4.10.0"
+    },
+    {
+      "name": "imgui",
+      "default-features": false,
+      "features": [
+        "docking-experimental",
+        "sdl3-binding",
+        "sdl3-renderer-binding"
+      ],
+      "version>=": "1.91.5"
+    },
+    {
+      "name": "sdl3",
+      "version>=": "3.1.6"
+    }
+  ],
+  "features": {
+    "spout": {
+      "description": "Windows-only Spout texture sharing support",
+      "supports": "windows",
+      "dependencies": []
+    },
+    "lipsync": {
+      "description": "Optional LivePortrait postprocessor (Python subprocess)",
+      "dependencies": []
+    }
+  },
+  "builtin-baseline": "44bb3ce006467fc13ba37ca099f64077b8bbf84d"
+}
