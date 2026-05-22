@@ -33,20 +33,35 @@ Spec-kit style task list. `[P]` = parallelizable with previous task.
 - [ ] Read `Torch-TensorRT/examples/apps/flux_demo.py` for export pattern
 - [ ] Document findings in `specs/phase-0-spike/research.md`
 
-## 0.4 Capture Python Reference
+## 0.4 Download + Verify AIO + Capture Reference
 
-- [ ] User: confirm Python FluxRT repo (`c:/Users/richk/CascadeProjects/FluxRT`) runs
-- [ ] User: `huggingface-cli login` (if not done)
-- [ ] User: clone FLUX.2-Klein-4B model to `FluxRT/`
-- [ ] Write `tools/capture_reference.py` — captures (input, prompt, seed, output_latent, output_image) tuples
+### 0.4a — Download AIO from CivitAI
+- [ ] User: create CivitAI account at https://civitai.com (will redirect to civitai.red for AIO)
+- [ ] User: generate API key at https://civitai.com/user/account
+- [ ] User: provide API key to Cascade (or set `CIVITAI_API_KEY` env var)
+- [x] Write `tools/download_aio.py` (CivitAI API downloader)
+- [ ] Run `python tools/download_aio.py` → `models/aio/flux2-klein-aio.safetensors`
+
+### 0.4b — Verify AIO Architecture (GO/NO-GO #1)
+- [ ] Write `tools/verify_aio_load.py` — load AIO via `Flux2KleinPipeline.from_single_file()` and print component shapes
+- [ ] Run it; **GATE:** All three components (transformer / vae / text_encoder) load successfully?
+  - YES → proceed
+  - NO → diffusers may not yet support AIO single-file format; fall back to manual safetensors parse + component-by-component construction. Update BLOCKED.md.
+- [ ] Verify FluxRT's `transformer_flux2.py` patches still apply to AIO (try running upstream FluxRT with AIO weights swapped in). **GATE:** end-to-end Python pipeline works?
+  - YES → proceed
+  - NO → AIO has different layer structure than base Klein. Major rethink: switch to base Klein + accept slower step count, OR write new patches for AIO. Pause and discuss with user.
+
+### 0.4c — Capture AIO Reference Latents
+- [ ] Write `tools/capture_reference.py` — captures (input, prompt, seed, output_latent, output_image) tuples using AIO scheduler
+- [ ] Use 4-step and 6-step configs (since AIO is distilled to that range)
 - [ ] Run script, save 10 fixtures to `tests/fixtures/`
 
-## 0.5 ONNX Export — GO/NO-GO #1
+## 0.5 ONNX Export — GO/NO-GO #2
 
-- [ ] Write `tools/export_onnx.py` — exports FLUX.2-Klein transformer to ONNX
+- [x] Write `tools/export_onnx.py` (refactored for AIO single-file)
 - [ ] [P] Adapt patterns from `Torch-TensorRT/examples/apps/flux_demo.py`
-- [ ] Use FP16, batch=1, fixed shape 512×512 for spike
-- [ ] Run export, verify `flux2_transformer.onnx` opens in Netron
+- [ ] Use FP16, batch=1, fixed shape 512×512 for spike (or BF16 if AIO precision matters)
+- [ ] Run export, verify `flux2_aio_transformer_512x512_fp16.onnx` opens in Netron
 - [ ] **GATE:** Does ONNX export succeed without errors?
   - YES → proceed to 0.6
   - NO → debug; if FLUX.2 has TRT-unsupported custom ops, write findings to `BLOCKED.md` and consider Torch-TensorRT mixed-mode fallback

@@ -10,15 +10,26 @@ This file tracks anything Cascade cannot do alone. Updated proactively.
 
 ### P0 — Required to start Phase 0 work
 
-- [ ] **Hugging Face authentication** *(date: 2026-05-22)*
+- [ ] **CivitAI account + API key for AIO model download** *(date: 2026-05-22)*
+      Status: Required after pivot to FLUX.2-klein-AIO (a CivitAI-only model).
       Action needed:
-      1. Get an HF access token (read scope) at
-         https://huggingface.co/settings/tokens
-      2. Run `huggingface-cli login` and paste the token.
-      3. Accept the FLUX.2-Klein license on
-         https://huggingface.co/black-forest-labs/FLUX.2-klein-4B
-      Workaround: Cascade can clone via git if you provide creds, but
-      `huggingface-cli` is the cleanest path.
+      1. Create / sign in at https://civitai.com (will redirect to civitai.red
+         since AIO is on the mature-content domain).
+      2. Generate an API key at
+         https://civitai.com/user/account (API Keys section).
+      3. Download `flux2-klein-aio` (single .safetensors, ~16 GB BF16 expected
+         for v1, or 7.9 GB for FP8 distill variant) from
+         https://civitai.com/models/2327389 to `models/aio/`.
+      4. Provide the API key to Cascade so `tools/download_aio.py` can pull
+         updates if the upstream version changes.
+      Workaround: Manual browser download is fine for the one-time grab.
+
+- [ ] **Hugging Face authentication (still needed for diffusers code)**
+      *(date: 2026-05-22)*
+      Action needed: `huggingface-cli login` with a read-scope token. We pull
+      the FLUX.2-Klein **diffusers code** (Python module) from HF even though
+      the AIO weights come from CivitAI. The base model on HF is also useful
+      as a known-good reference for parity tests.
 
 ### P2 — Required before Phase 5 (Quantization)
 

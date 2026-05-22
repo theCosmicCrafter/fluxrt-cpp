@@ -23,8 +23,15 @@ engines/*.cache
 !tools/**/*.onnx_template
 
 # Model weights (download separately)
+models/**/*.safetensors
+models/**/*.ckpt
+models/**/*.pt
+models/**/*.bin
+!models/**/.gitkeep
+!models/**/README.md
 FLUX.2-klein-4B/
 FLUX.2-klein-4B-int8/
+FLUX.2-klein-AIO/
 RIFE-safetensors/
 LivePortrait/
 LivePortrait-code/

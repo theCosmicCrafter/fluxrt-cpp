@@ -11,11 +11,13 @@ would cost weeks.
 
 | # | Risk | What success looks like |
 |---|---|---|
-| 1 | FLUX.2-Klein transformer can be exported to ONNX | `flux2_transformer.onnx` opens in Netron without errors |
-| 2 | TensorRT 10 can compile that ONNX into a `.plan` engine | `trtexec --loadEngine` runs without errors |
-| 3 | C++ harness can run the engine and produce output matching Python | PSNR ≥ 40 dB vs Python reference at identical seed |
-| 4 | The custom **Spatial KV Cache** can be extracted from `transformer_flux2.py` and reimplemented as a standalone CUDA kernel | Bit-exact output at 0% dynamic area vs Python |
-| 5 | TensorRT engine refit (for runtime LoRA hot-swap) actually works on a FLUX engine | Output PSNR ≤ 30 dB vs base after refitting LoRA weights (proves refit took effect) |
+| 1 | **AIO single-file format loads via diffusers `from_single_file()`** and decomposes into transformer / VAE / text encoder | All three component objects accessible; can `forward()` each one independently |
+| 2 | **Spatial-cache patches in `transformer_flux2.py` apply to AIO architecture** (AIO is distilled but should be structurally identical) | FluxRT Python pipeline runs end-to-end with AIO weights at 4–6 steps |
+| 3 | AIO transformer can be exported to ONNX | `flux2_transformer_aio.onnx` opens in Netron without errors |
+| 4 | TensorRT 10 can compile that ONNX into a `.plan` engine | `trtexec --loadEngine` runs without errors |
+| 5 | C++ harness can run the engine and produce output matching Python AIO reference | PSNR ≥ 40 dB vs Python AIO reference at identical seed |
+| 6 | The custom **Spatial KV Cache** ports as a standalone CUDA kernel | Bit-exact output at 0% dynamic area vs Python |
+| 7 | TensorRT engine refit (for runtime LoRA hot-swap) works on a FLUX-distilled engine | Output PSNR ≤ 30 dB vs base after refitting LoRA weights |
 
 ---
 
@@ -31,20 +33,37 @@ gates the next:
     │
 0.3 Reference repo study (read stable-diffusion.cpp's FLUX path)
     │
-0.4 Capture Python reference latents     ◄── needs Python FluxRT working
+0.4a Download AIO weights from CivitAI       ◄── needs civitai API key
+0.4b Verify AIO loads in upstream FluxRT     ◄── GO/NO-GO #1 (architecture)
+0.4c Capture AIO reference latents (10 fixtures)
     │
-0.5 Export FLUX.2-Klein transformer to ONNX  ◄── GO/NO-GO #1
+0.5 Export AIO transformer to ONNX           ◄── GO/NO-GO #2 (export)
     │
-0.6 Build TRT engine from ONNX               ◄── GO/NO-GO #2
+0.6 Build TRT engine from ONNX               ◄── GO/NO-GO #3 (compile)
     │
-0.7 C++ engine harness, parity test          ◄── GO/NO-GO #3
+0.7 C++ engine harness, parity test          ◄── GO/NO-GO #4 (numerics)
     │
-0.8 Spatial KV cache CUDA port               ◄── GO/NO-GO #4
+0.8 Spatial KV cache CUDA port               ◄── GO/NO-GO #5 (kernel)
     │
-0.9 LoRA engine refit spike                  ◄── GO/NO-GO #5
+0.9 LoRA engine refit spike                  ◄── GO/NO-GO #6 (refit)
     │
 0.10 Phase 0 results writeup, go/no-go decision for Phase 1
 ```
+
+### Special Note on AIO Distillation
+
+AIO is a 4–6-step distilled FLUX.2-Klein-4B. Implications:
+
+- **Scheduler config differs.** Distilled models use sigma schedules tuned for
+  the smaller step count. We must capture the AIO scheduler config alongside
+  the weights and reproduce it in the C++ runtime exactly.
+- **Architecture should be identical** to base Klein-4B (distillation only
+  changes weights, not topology). If it isn't, the FluxRT spatial-cache
+  patches in `transformer_flux2.py` will break and we have a much bigger
+  problem. Risk #2 above tests this.
+- **Real-time math improves dramatically.** At 6 steps + ~100ms per step on
+  RTX 5090, that's 600ms per generation — within reach of streaming use cases
+  with frame-level caching from FluxRT's spatial cache.
 
 The only parallelism is during Phase 0.7 — while the engine builds
 (can take 10–15 min), I can write the harness scaffolding.

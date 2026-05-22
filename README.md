@@ -6,6 +6,11 @@ NVIDIA RTX 4090 / 5090.
 
 **Repo:** https://github.com/theCosmicCrafter/fluxrt-cpp
 
+**Target model:** [FLUX.2-klein-AIO](https://civitai.com/models/2327389/flux2-klein-aio)
+— a 4–6-step distilled, all-in-one (transformer + VAE + text encoder bundled),
+Apache-2.0 licensed FLUX.2-Klein 4B variant. The distillation is critical for
+our real-time goals: ~5× fewer denoising steps than base Klein.
+
 > **Status:** Phase 0 (de-risking spike). Not yet usable. See `specs/` for
 > phase plans and `BLOCKED.md` for current dependencies.
 
