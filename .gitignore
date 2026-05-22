@@ -20,6 +20,8 @@ engines/*.cache
 # ONNX intermediates
 *.onnx
 *.onnx_data
+engines/onnx/onnx_*
+engines/onnx/_*
 !tools/**/*.onnx_template
 
 # Model weights (download separately)

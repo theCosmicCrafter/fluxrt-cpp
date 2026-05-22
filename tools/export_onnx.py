@@ -1,227 +1,222 @@
 """
-Export FLUX.2-Klein single-file checkpoint components to ONNX.
+Export FLUX.2-Klein transformer to ONNX for TensorRT engine build.
 
 This script is a build-time tool only (Constitution Article III).
-It runs in the Python environment of the upstream FluxRT repo.
-
-Works with either:
-- Base `flux-2-klein-4b.safetensors` from black-forest-labs/FLUX.2-klein-4B
-- Distilled AIO `flux2-klein-aio.safetensors` from CivitAI #2327389
-
-Both use the standard `Flux2KleinPipeline.from_single_file()` loader.
 
 Usage:
-    # From a conda env with FluxRT + diffusers installed
-    python tools/export_onnx.py \\
+    venv/Scripts/python tools/export_onnx.py \\
         --checkpoint models/base/flux-2-klein-4b.safetensors \\
         --output-dir engines/onnx \\
-        --resolution 512 512 \\
-        --component transformer
-
-Components:
-    transformer  - main 4B FLUX.2 DiT transformer (largest, ~7-8 GB ONNX)
-    vae          - autoencoder decoder (small, ~150 MB ONNX)
-    text_encoder - Qwen3 text encoder (large, ~3 GB ONNX)
-
-Phase 0 spike: only `transformer` is required.
+        --height 512 --width 512
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
+import torch
+import torch.nn as nn
+from diffusers import Flux2Transformer2DModel
+from diffusers.loaders.single_file_utils import convert_flux2_transformer_checkpoint_to_diffusers
+from safetensors.torch import load_file
 
-def _load_klein_pipeline(checkpoint: Path, dtype):
-    """Load a FLUX.2-Klein single-file checkpoint into a Flux2KleinPipeline.
 
-    Works for both base Klein (`flux-2-klein-4b.safetensors`) and AIO
-    distillation single-file checkpoints.
+class ManualRMSNorm(nn.Module):
+    """ONNX-compatible RMSNorm using standard ops."""
 
-    Args:
-        checkpoint: Path to the .safetensors file.
-        dtype: torch dtype for inference.
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
 
-    Returns:
-        Flux2KleinPipeline with .transformer / .vae / .text_encoder attributes.
-    """
-    import torch  # noqa: F401, PLC0415  (used by caller via dtype)
-    from diffusers import Flux2KleinPipeline  # noqa: PLC0415
+    def forward(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
 
-    print(f"[export_onnx] Loading Klein pipeline from {checkpoint}...")
-    if not checkpoint.exists():
-        raise FileNotFoundError(
-            f"Checkpoint not found: {checkpoint}. "
-            f"Place a FLUX.2-Klein single-file safetensors there. For the base "
-            f"Klein-4B, download from "
-            f"https://huggingface.co/black-forest-labs/FLUX.2-klein-4B."
-        )
 
-    pipeline = Flux2KleinPipeline.from_single_file(
-        str(checkpoint),
-        torch_dtype=dtype,
-    ).to("cuda")
+def replace_rmsnorm(module):
+    """Recursively replace nn.RMSNorm with ManualRMSNorm in place."""
+    for name, child in module.named_children():
+        if isinstance(child, nn.RMSNorm):
+            # Get config from original module
+            dim = child.weight.shape[0]
+            eps = child.eps
+            new_norm = ManualRMSNorm(dim, eps=eps)
+            # Copy weight
+            with torch.no_grad():
+                new_norm.weight.copy_(child.weight)
+            setattr(module, name, new_norm)
+        else:
+            replace_rmsnorm(child)
 
-    # Sanity-check: verify all three components are present.
-    for attr in ("transformer", "vae", "text_encoder"):
-        if not hasattr(pipeline, attr) or getattr(pipeline, attr) is None:
-            raise RuntimeError(
-                f"Pipeline missing component '{attr}'. "
-                f"This means from_single_file() failed to decompose the "
-                f"checkpoint. Check diffusers version (need recent enough "
-                f"to know about FLUX.2-Klein) and the checkpoint file."
-            )
 
-    return pipeline
+def load_transformer(checkpoint: Path, config_path: Path):
+    """Load transformer from safetensors + config."""
+    print(f"[export] Loading config: {config_path}")
+    with open(config_path, encoding="utf-8") as f:
+        config = json.load(f)
+
+    print(f"[export] Loading weights: {checkpoint}")
+    state_dict = load_file(str(checkpoint), device="cpu")
+    print(f"  Keys in checkpoint: {len(state_dict)}")
+
+    print("[export] Converting checkpoint keys to diffusers format...")
+    state_dict = convert_flux2_transformer_checkpoint_to_diffusers(state_dict)
+    print(f"  Converted keys: {len(state_dict)}")
+
+    print("[export] Building model...")
+    model = Flux2Transformer2DModel.from_config(config)
+    model.load_state_dict(state_dict, strict=True)
+    print("  State dict loaded (strict=True) — all keys matched!")
+    return model
+
+
+def build_dummy_inputs(device: str, batch_size: int, height: int, width: int,
+                       txt_seq_len: int, joint_attention_dim: int,
+                       in_channels: int, guidance_embeds: bool):
+    """Build dummy inputs matching the verified Phase 0.4 shapes."""
+    img_seq_len = height * width
+
+    # hidden_states: packed [B, H*W, C]
+    latents_4d = torch.randn(
+        batch_size, in_channels, height, width, dtype=torch.float32, device=device,
+    )
+    hidden_states = latents_4d.reshape(batch_size, in_channels, img_seq_len).permute(0, 2, 1)
+
+    # img_ids: 4D coords (T, H, W, L)
+    img_ids = torch.cartesian_prod(
+        torch.arange(1), torch.arange(height), torch.arange(width), torch.arange(1),
+    ).unsqueeze(0).expand(batch_size, -1, -1).to(device)
+
+    # encoder_hidden_states
+    encoder_hidden_states = torch.randn(batch_size, txt_seq_len, joint_attention_dim,
+                                        dtype=torch.float32, device=device)
+
+    # txt_ids
+    txt_ids = torch.cartesian_prod(
+        torch.arange(1), torch.arange(1), torch.arange(1), torch.arange(txt_seq_len),
+    ).unsqueeze(0).expand(batch_size, -1, -1).to(device)
+
+    timestep = torch.tensor([0.5], dtype=torch.float32, device=device)
+    guidance = torch.tensor([3.0], dtype=torch.float32, device=device) if guidance_embeds else None
+
+    return {
+        "hidden_states": hidden_states,
+        "encoder_hidden_states": encoder_hidden_states,
+        "timestep": timestep,
+        "img_ids": img_ids,
+        "txt_ids": txt_ids,
+        "guidance": guidance,
+    }
 
 
 def export_transformer(
     checkpoint: Path,
+    config_path: Path,
     output_path: Path,
     height: int,
     width: int,
-    fp16: bool = True,
+    batch_size: int = 1,
 ) -> None:
-    """Export the FLUX.2-Klein transformer to ONNX.
+    """Export the FLUX.2-Klein transformer to ONNX with dynamic axes."""
+    device = "cpu"  # CPU export; RTX 5090 sm_120 not supported by current torch
+    model = load_transformer(checkpoint, config_path)
+    model.to(device).eval()
 
-    Phase 0 spike: fixed batch=1, fixed resolution. No dynamic shapes.
+    print("[export] Replacing nn.RMSNorm with ONNX-compatible ManualRMSNorm...")
+    replace_rmsnorm(model)
+    print("  Done.")
 
-    Args:
-        checkpoint: Path to a FLUX.2-Klein single-file .safetensors
-                    (base or AIO).
-        output_path: Path to write the ONNX file.
-        height: Input image height in pixels.
-        width: Input image width in pixels.
-        fp16: Whether to export in float16 (default). Set to False for bf16.
-    """
-    import torch  # noqa: PLC0415
-
-    dtype = torch.float16 if fp16 else torch.bfloat16
-    pipeline = _load_klein_pipeline(checkpoint, dtype)
-    transformer = pipeline.transformer.eval()
-
-    # FLUX.2 latent has 16 channels, downsamples 8x from pixel space.
-    h_latent = height // 8
-    w_latent = width // 8
-
-    # Sequence length for image latent tokens (after patchifying).
-    # Patch size is typically 2x2.
-    patch_size = 2
-    seq_len_img = (h_latent // patch_size) * (w_latent // patch_size)
-
-    # Dummy inputs matching the transformer.forward(...) signature.
-    # Exact shapes need to be verified against the FLUX.2-Klein code path.
-    # TODO(phase-0): cross-check against transformer_flux2.py forward signature.
-    print(
-        f"[export_onnx] Building dummy inputs: "
-        f"latent={h_latent}x{w_latent}, seq_len_img={seq_len_img}"
+    cfg = model.config
+    inputs = build_dummy_inputs(
+        device=device, batch_size=batch_size, height=height, width=width,
+        txt_seq_len=256, joint_attention_dim=cfg.joint_attention_dim,
+        in_channels=cfg.in_channels, guidance_embeds=cfg.guidance_embeds,
     )
 
-    hidden_states = torch.randn(
-        1, seq_len_img, 64,  # 16 ch * 2 * 2 patch
-        device="cuda", dtype=dtype,
-    )
-    encoder_hidden_states = torch.randn(
-        1, 256, 4096,  # text token seq, Qwen3 hidden dim — verify!
-        device="cuda", dtype=dtype,
-    )
-    timestep = torch.tensor([0.5], device="cuda", dtype=dtype)
-    img_ids = torch.zeros(seq_len_img, 3, device="cuda", dtype=dtype)
-    txt_ids = torch.zeros(256, 3, device="cuda", dtype=dtype)
-    guidance = torch.tensor([3.5], device="cuda", dtype=dtype)
+    # Filter None guidance for models that don't use it
+    args = tuple(v for v in inputs.values() if v is not None)
+    input_names = [k for k, v in inputs.items() if v is not None]
 
-    args = (
-        hidden_states,
-        encoder_hidden_states,
-        timestep,
-        img_ids,
-        txt_ids,
-        guidance,
-    )
-    input_names = [
-        "hidden_states",
-        "encoder_hidden_states",
-        "timestep",
-        "img_ids",
-        "txt_ids",
-        "guidance",
-    ]
-    output_names = ["sample"]
+    # Dynamic axes for batch, image sequence, and text sequence
+    dynamic_axes = {
+        "hidden_states": {0: "batch", 1: "img_seq_len"},
+        "encoder_hidden_states": {0: "batch", 1: "txt_seq_len"},
+        "timestep": {0: "batch"},
+        "img_ids": {0: "batch", 1: "img_seq_len"},
+        "txt_ids": {0: "batch", 1: "txt_seq_len"},
+    }
+    if cfg.guidance_embeds:
+        dynamic_axes["guidance"] = {0: "batch"}
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"[export_onnx] Exporting to {output_path}...")
+    print(f"\n[export] Exporting to {output_path}...")
+    print(f"  opset=17, dynamic_axes={list(dynamic_axes.keys())}")
 
     with torch.inference_mode():
-        torch.onnx.export(
-            transformer,
-            args,
-            str(output_path),
-            input_names=input_names,
-            output_names=output_names,
-            opset_version=20,
-            export_params=True,
-            do_constant_folding=True,
-            external_data=True,  # 4B params won't fit in single .onnx file
-        )
+        print("[export] Trying dynamo_export (torch.export-based)...")
+        try:
+            onnx_program = torch.onnx.export(
+                model,
+                args,
+                str(output_path),
+                input_names=input_names,
+                output_names=["sample"],
+                dynamic_axes=dynamic_axes,
+                opset_version=17,
+                export_params=True,
+                do_constant_folding=True,
+                dynamo=True,
+            )
+            if onnx_program is not None:
+                onnx_program.save(str(output_path))
+            print(f"[export] dynamo_export succeeded: {output_path}")
+        except Exception as e:
+            print(f"[export] dynamo_export failed: {e}")
+            print("[export] Falling back to trace-based torch.onnx.export...")
+            torch.onnx.export(
+                model,
+                args,
+                str(output_path),
+                input_names=input_names,
+                output_names=["sample"],
+                dynamic_axes=dynamic_axes,
+                opset_version=17,
+                export_params=True,
+                do_constant_folding=True,
+                use_external_data_format=True,
+            )
 
-    print(f"[export_onnx] Done. Wrote {output_path} (with external data).")
-
-
-def export_vae(*args, **kwargs):
-    raise NotImplementedError("VAE export deferred to Phase 1.")
-
-
-def export_text_encoder(*args, **kwargs):
-    raise NotImplementedError("Text encoder export deferred to Phase 1.")
+    print(f"[export] Done. Wrote {output_path}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--checkpoint", type=Path,
-        default=Path("models/base/flux-2-klein-4b.safetensors"),
-        help="Path to FLUX.2-Klein single-file .safetensors (base or AIO). "
-             "Default: models/base/flux-2-klein-4b.safetensors",
-    )
-    parser.add_argument(
-        "--output-dir", type=Path, default=Path("engines/onnx"),
-        help="Directory to write ONNX files.",
-    )
-    parser.add_argument(
-        "--component", choices=["transformer", "vae", "text_encoder"],
-        default="transformer",
-    )
-    parser.add_argument(
-        "--resolution", nargs=2, type=int, default=[512, 512],
-        metavar=("HEIGHT", "WIDTH"),
-    )
-    parser.add_argument(
-        "--bf16", action="store_true",
-        help="Export in bfloat16 (AIO native dtype). Default is float16.",
-    )
+    parser.add_argument("--checkpoint", type=Path,
+                        default=Path("models/base/flux-2-klein-4b.safetensors"))
+    parser.add_argument("--config", type=Path,
+                        default=Path("models/base-config/transformer/config.json"))
+    parser.add_argument("--output-dir", type=Path, default=Path("engines/onnx"))
+    parser.add_argument("--height", type=int, default=512)
+    parser.add_argument("--width", type=int, default=512)
+    parser.add_argument("--batch-size", type=int, default=1)
     args = parser.parse_args()
 
-    height, width = args.resolution
-    fp16 = not args.bf16
-    suffix = "fp16" if fp16 else "bf16"
+    # Derive latent spatial dimensions from pixel dimensions.
+    # The model works on packed latents; height/width here are the spatial
+    # dimensions of the packed latent grid (e.g. 64x64 for 512px image).
+    # VAE does 8x compression: 512/8 = 64.
+    latent_h = args.height // 8
+    latent_w = args.width // 8
 
-    # Derive output filename stem from checkpoint stem (e.g. "flux-2-klein-4b").
     stem = args.checkpoint.stem.replace("-", "_").replace(".", "_")
-
-    if args.component == "transformer":
-        out = args.output_dir / f"{stem}_transformer_{height}x{width}_{suffix}.onnx"
-        export_transformer(args.checkpoint, out, height, width, fp16=fp16)
-    elif args.component == "vae":
-        out = args.output_dir / f"{stem}_vae_{height}x{width}.onnx"
-        export_vae(args.checkpoint, out, height, width)
-    elif args.component == "text_encoder":
-        out = args.output_dir / f"{stem}_text_encoder.onnx"
-        export_text_encoder(args.checkpoint, out)
-    else:
-        print(f"unknown component: {args.component}", file=sys.stderr)
-        return 1
-
+    out = args.output_dir / f"{stem}_transformer_{args.height}x{args.width}.onnx"
+    export_transformer(
+        args.checkpoint, args.config, out,
+        height=latent_h, width=latent_w, batch_size=args.batch_size,
+    )
     return 0
 
 
