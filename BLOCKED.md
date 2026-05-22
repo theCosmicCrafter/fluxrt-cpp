@@ -10,23 +10,6 @@ This file tracks anything Cascade cannot do alone. Updated proactively.
 
 ### P0 — Required to start Phase 0 work
 
-- [ ] **TensorRT 10 download & install** *(date: 2026-05-22)*
-      Action needed:
-      1. Sign in / register at https://developer.nvidia.com/tensorrt
-      2. Download TensorRT 10.7 or newer for Windows, CUDA 13.x, zip package
-      3. Extract to `C:\TensorRT-10.x` (or your chosen path)
-      4. Add `C:\TensorRT-10.x\bin` to PATH
-      5. Add `C:\TensorRT-10.x\lib` to PATH
-      6. Verify with: `trtexec --help`
-      Workaround: None. NVIDIA gates this download behind their EULA, no
-      automation possible.
-
-- [ ] **GitHub repo creation** *(date: 2026-05-22)*
-      Action needed: Create empty private repo named `FluxRT-CPP` under your
-      GitHub account. Do not initialize with README/license/gitignore — we
-      have those locally already.
-      Workaround: None.
-
 - [ ] **Hugging Face authentication** *(date: 2026-05-22)*
       Action needed:
       1. Get an HF access token (read scope) at
@@ -36,17 +19,6 @@ This file tracks anything Cascade cannot do alone. Updated proactively.
          https://huggingface.co/black-forest-labs/FLUX.2-klein-4B
       Workaround: Cascade can clone via git if you provide creds, but
       `huggingface-cli` is the cleanest path.
-
-### P1 — Required during Phase 0
-
-- [ ] **CUDA 13.2 install completion + reboot** *(date: 2026-05-22)*
-      Status: winget install kicked off in background.
-      Action needed: Approve UAC if prompted. Reboot if installer asks.
-      Verification command: `nvcc --version`
-
-- [ ] **Visual Studio 2022 (Community + C++ workload) install** *(date: 2026-05-22)*
-      Status: Will start once CUDA install completes.
-      Action needed: Approve UAC if prompted.
 
 ### P2 — Required before Phase 5 (Quantization)
 
@@ -58,8 +30,26 @@ This file tracks anything Cascade cannot do alone. Updated proactively.
 
 ## Resolved Blockers
 
-*(Items get moved here once unblocked. Empty for now.)*
+- [x] **CUDA Toolkit installed** *(resolved: 2026-05-22)*
+      CUDA 13.2.78 installed via `winget install Nvidia.CUDA`.
+      Verified: `nvcc --version` returns `release 13.2, V13.2.78`.
+
+- [x] **Visual Studio 2022 Build Tools installed** *(resolved: 2026-05-22)*
+      Installed via `winget install Microsoft.VisualStudio.2022.BuildTools`
+      with NativeDesktop / VCTools / Windows11SDK / CMake workloads.
+      MSVC 14.44.35207 at standard path. `cl.exe` and `vcvars64.bat`
+      both present.
+
+- [x] **TensorRT 10 download & install** *(resolved: 2026-05-22)*
+      TensorRT 10.16.1.11 extracted to
+      `C:\Users\richk\CascadeProjects\TensorRT-10.16.1.11`.
+      `bin/`, `lib/`, `include/` populated. `trtexec.exe` present.
+      User PATH and `TENSORRT_ROOT` env var set.
+
+- [x] **GitHub repo creation + initial push** *(resolved: 2026-05-22)*
+      Repo at https://github.com/theCosmicCrafter/fluxrt-cpp.
+      Initial commit `361c13a6` pushed to `main`.
 
 ---
 
-*Updated by Cascade automatically. Last edit: 2026-05-22 13:15 ET.*
+*Updated by Cascade automatically. Last edit: 2026-05-22 13:50 ET.*

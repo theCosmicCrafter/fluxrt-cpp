@@ -4,6 +4,8 @@ A C++ port of [FluxRT](https://github.com/tensorforger/FluxRT) — real-time
 FLUX.2-Klein stream editing — built on TensorRT for maximum performance on
 NVIDIA RTX 4090 / 5090.
 
+**Repo:** https://github.com/theCosmicCrafter/fluxrt-cpp
+
 > **Status:** Phase 0 (de-risking spike). Not yet usable. See `specs/` for
 > phase plans and `BLOCKED.md` for current dependencies.
 

@@ -35,9 +35,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ----------------------------------------------------------------------------
 # CUDA architectures: target Ada (RTX 4090 = 89) and Blackwell (RTX 5090 = 120)
 # ----------------------------------------------------------------------------
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    # 89 = Ada (RTX 40xx), 120 = Blackwell (RTX 50xx)
-    set(CMAKE_CUDA_ARCHITECTURES "89;120")
+# Force-override the default that project() picks (often "native" or first GPU).
+# Users can still override on the command line with -DCMAKE_CUDA_ARCHITECTURES=...
+if(NOT FLUXRT_CUDA_ARCHITECTURES_OVERRIDDEN)
+    set(CMAKE_CUDA_ARCHITECTURES "89;120" CACHE STRING
+        "Target CUDA architectures (89=Ada RTX 4090, 120=Blackwell RTX 5090)"
+        FORCE)
+    set(FLUXRT_CUDA_ARCHITECTURES_OVERRIDDEN ON CACHE INTERNAL "")
 endif()
 
 message(STATUS "FluxRT-CPP: CUDA architectures = ${CMAKE_CUDA_ARCHITECTURES}")

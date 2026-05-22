@@ -2,65 +2,54 @@
   "name": "fluxrt-cpp",
   "version-string": "0.1.0-phase0",
   "description": "Real-time FLUX.2 stream editing in C++ with TensorRT",
-  "homepage": "https://github.com/richk/FluxRT-CPP",
+  "homepage": "https://github.com/theCosmicCrafter/fluxrt-cpp",
   "license": "Apache-2.0",
   "supports": "(windows | linux) & x64",
   "dependencies": [
-    {
-      "name": "nlohmann-json",
-      "version>=": "3.11.3"
-    },
-    {
-      "name": "fmt",
-      "version>=": "10.2.1"
-    },
-    {
-      "name": "spdlog",
-      "version>=": "1.14.1"
-    },
-    {
-      "name": "catch2",
-      "version>=": "3.5.4"
-    },
-    {
-      "name": "stb",
-      "version>=": "2024-07-29"
-    },
-    {
-      "name": "opencv4",
-      "default-features": false,
-      "features": [
-        "core",
-        "imgcodecs",
-        "videoio"
-      ],
-      "version>=": "4.10.0"
-    },
-    {
-      "name": "imgui",
-      "default-features": false,
-      "features": [
-        "docking-experimental",
-        "sdl3-binding",
-        "sdl3-renderer-binding"
-      ],
-      "version>=": "1.91.5"
-    },
-    {
-      "name": "sdl3",
-      "version>=": "3.1.6"
-    }
+    "nlohmann-json",
+    "fmt",
+    "spdlog",
+    "catch2",
+    "stb"
   ],
   "features": {
+    "io": {
+      "description": "Webcam / video file I/O (Phase 3+). Pulls in OpenCV (heavy).",
+      "dependencies": [
+        {
+          "name": "opencv4",
+          "default-features": false,
+          "features": [
+            "jpeg",
+            "png"
+          ]
+        }
+      ]
+    },
+    "gui": {
+      "description": "Dear ImGui + SDL3 GUI (Phase 4+).",
+      "dependencies": [
+        "sdl3",
+        {
+          "name": "imgui",
+          "default-features": false,
+          "features": [
+            "docking-experimental",
+            "sdl3-binding",
+            "sdl3-renderer-binding"
+          ]
+        }
+      ]
+    },
     "spout": {
-      "description": "Windows-only Spout texture sharing support",
+      "description": "Windows-only Spout texture sharing support (Phase 4+).",
       "supports": "windows",
       "dependencies": []
     },
     "lipsync": {
-      "description": "Optional LivePortrait postprocessor (Python subprocess)",
+      "description": "Optional LivePortrait postprocessor (Python subprocess).",
       "dependencies": []
     }
   },
-  "builtin-baseline": "44bb3ce006467fc13ba37ca099f64077b8bbf84d"
+  "builtin-baseline": "22d9c655dc24ad24c6cac27607005e619ce46740"
 }
