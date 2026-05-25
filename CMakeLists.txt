@@ -9,6 +9,22 @@ if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
         CACHE STRING "Vcpkg toolchain file")
 endif()
 
+# ----------------------------------------------------------------------------
+# CUDA auto-detection (must run BEFORE project() so compiler ID tests work)
+# On Windows CMake sometimes picks up a partial CUDA from conda/PATH.
+# ----------------------------------------------------------------------------
+if(WIN32 AND NOT DEFINED CUDAToolkit_ROOT AND NOT DEFINED ENV{CUDAToolkit_ROOT})
+    file(GLOB _cuda_dirs
+        "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v*")
+    if(_cuda_dirs)
+        list(SORT _cuda_dirs)
+        list(GET _cuda_dirs -1 _latest_cuda)
+        set(CUDAToolkit_ROOT "${_latest_cuda}" CACHE PATH "CUDA Toolkit root" FORCE)
+        set(CMAKE_CUDA_COMPILER "${_latest_cuda}/bin/nvcc.exe" CACHE FILEPATH "CUDA compiler" FORCE)
+        message(STATUS "FluxRT-CPP: Auto-detected CUDA at ${_latest_cuda}")
+    endif()
+endif()
+
 project(FluxRT_CPP
     VERSION 0.1.0
     DESCRIPTION "Real-time FLUX.2 stream editing in C++ with TensorRT"
@@ -112,9 +128,8 @@ else()
     target_link_libraries(TensorRT::TensorRT INTERFACE
         TensorRT::nvinfer
         TensorRT::onnxparser
-        TensorRT::plugin
-        CUDA::cudart
-        CUDA::cuda_driver)
+        TensorRT::plugin # Link against the plugin library
+        CUDA::cudart)    # Link against the CUDA runtime API, not the driver API
 endif()
 
 # ----------------------------------------------------------------------------
@@ -136,7 +151,7 @@ endif()
 # Subdirectories
 # Phase 0 only adds the spike harness; later phases add inference/, pipeline/, etc.
 # ----------------------------------------------------------------------------
-# add_subdirectory(src)
+add_subdirectory(src)
 
 if(FLUXRT_BUILD_TESTS)
     enable_testing()

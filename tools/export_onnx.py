@@ -1,17 +1,8 @@
-"""
-Export FLUX.2-Klein transformer to ONNX for TensorRT engine build.
-
-This script is a build-time tool only (Constitution Article III).
+"""Phase 0.5: Export FLUX.2-Klein Transformer to ONNX.
 
 Usage:
-    venv/Scripts/python tools/export_onnx.py \\
-        --checkpoint models/base/flux-2-klein-4b.safetensors \\
-        --output-dir engines/onnx \\
-        --height 512 --width 512
+    venv\\Scripts\\python tools\\export_onnx.py
 """
-
-from __future__ import annotations
-
 import argparse
 import json
 import sys
@@ -23,42 +14,66 @@ from diffusers import Flux2Transformer2DModel
 from diffusers.loaders.single_file_utils import convert_flux2_transformer_checkpoint_to_diffusers
 from safetensors.torch import load_file
 
+MODEL_DIR = Path("models/base")
+CONFIG_DIR = Path("models/base-config")
+CHECKPOINT = MODEL_DIR / "flux-2-klein-4b.safetensors"
+TRANSFORMER_CONFIG = CONFIG_DIR / "transformer" / "config.json"
 
+
+# ---------------------------------------------------------------------------
+# RMSNorm workaround for ONNX export (aten::rms_norm is not supported)
+# ---------------------------------------------------------------------------
 class ManualRMSNorm(nn.Module):
-    """ONNX-compatible RMSNorm using standard ops."""
+    """ONNX-compatible replacement for nn.RMSNorm."""
 
-    def __init__(self, dim, eps=1e-6):
+    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True):
         super().__init__()
+        self.normalized_shape = normalized_shape
         self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
+        self.elementwise_affine = elementwise_affine
+        if elementwise_affine:
+            self.weight = nn.Parameter(torch.ones(normalized_shape))
+        else:
+            self.register_parameter("weight", None)
 
     def forward(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
+        var = x.pow(2).mean(dim=-1, keepdim=True)
+        x = x * torch.rsqrt(var + self.eps)
+        if self.weight is not None:
+            x = x * self.weight
+        return x
 
 
-def replace_rmsnorm(module):
-    """Recursively replace nn.RMSNorm with ManualRMSNorm in place."""
+def replace_rmsnorm(module: nn.Module):
+    """Recursively replace nn.RMSNorm with ManualRMSNorm."""
     for name, child in module.named_children():
         if isinstance(child, nn.RMSNorm):
-            # Get config from original module
-            dim = child.weight.shape[0]
-            eps = child.eps
-            new_norm = ManualRMSNorm(dim, eps=eps)
-            # Copy weight
-            with torch.no_grad():
-                new_norm.weight.copy_(child.weight)
-            setattr(module, name, new_norm)
+            manual = ManualRMSNorm(
+                child.normalized_shape,
+                child.eps,
+                child.elementwise_affine,
+            )
+            if child.weight is not None:
+                manual.weight.data.copy_(child.weight.data)
+            setattr(module, name, manual)
         else:
             replace_rmsnorm(child)
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def load_transformer(checkpoint: Path, config_path: Path):
-    """Load transformer from safetensors + config."""
-    print(f"[export] Loading config: {config_path}")
+    print(f"[export] Loading transformer config: {config_path}")
     with open(config_path, encoding="utf-8") as f:
         config = json.load(f)
 
-    print(f"[export] Loading weights: {checkpoint}")
+    print(f"  num_layers (double): {config['num_layers']}")
+    print(f"  num_single_layers: {config['num_single_layers']}")
+    print(f"  num_attention_heads: {config['num_attention_heads']}")
+    print(f"  attention_head_dim: {config['attention_head_dim']}")
+
+    print(f"\n[export] Loading weights: {checkpoint}")
     state_dict = load_file(str(checkpoint), device="cpu")
     print(f"  Keys in checkpoint: {len(state_dict)}")
 
@@ -66,50 +81,64 @@ def load_transformer(checkpoint: Path, config_path: Path):
     state_dict = convert_flux2_transformer_checkpoint_to_diffusers(state_dict)
     print(f"  Converted keys: {len(state_dict)}")
 
-    print("[export] Building model...")
+    print("\n[export] Building model...")
     model = Flux2Transformer2DModel.from_config(config)
     model.load_state_dict(state_dict, strict=True)
     print("  State dict loaded (strict=True) — all keys matched!")
     return model
 
 
-def build_dummy_inputs(device: str, batch_size: int, height: int, width: int,
-                       txt_seq_len: int, joint_attention_dim: int,
-                       in_channels: int, guidance_embeds: bool):
-    """Build dummy inputs matching the verified Phase 0.4 shapes."""
+def build_dummy_inputs(device, batch_size, height, width,
+                       txt_seq_len, joint_attention_dim,
+                       in_channels, guidance_embeds):
+    """Construct dummy inputs matching the Flux2 pipeline."""
     img_seq_len = height * width
 
-    # hidden_states: packed [B, H*W, C]
-    latents_4d = torch.randn(
-        batch_size, in_channels, height, width, dtype=torch.float32, device=device,
+    hidden_states = torch.randn(
+        batch_size, img_seq_len, in_channels,
+        dtype=torch.float32, device=device,
     )
-    hidden_states = latents_4d.reshape(batch_size, in_channels, img_seq_len).permute(0, 2, 1)
+    encoder_hidden_states = torch.randn(
+        batch_size, txt_seq_len, joint_attention_dim,
+        dtype=torch.float32, device=device,
+    )
+    timestep = torch.tensor([0.5] * batch_size, dtype=torch.float32, device=device)
 
-    # img_ids: 4D coords (T, H, W, L)
-    img_ids = torch.cartesian_prod(
-        torch.arange(1), torch.arange(height), torch.arange(width), torch.arange(1),
-    ).unsqueeze(0).expand(batch_size, -1, -1).to(device)
+    # 4D coords matching cartesian_prod
+    img_ids = torch.zeros(batch_size, img_seq_len, 4, dtype=torch.int64, device=device)
+    idx = 0
+    for t in range(batch_size):
+        for h in range(height):
+            for w in range(width):
+                for layer in range(1):
+                    img_ids[t, idx] = torch.tensor([t, h, w, layer], dtype=torch.int64)
+                    idx += 1
 
-    # encoder_hidden_states
-    encoder_hidden_states = torch.randn(batch_size, txt_seq_len, joint_attention_dim,
-                                        dtype=torch.float32, device=device)
+    txt_ids = torch.zeros(batch_size, txt_seq_len, 4, dtype=torch.int64, device=device)
+    idx = 0
+    for t in range(batch_size):
+        for h in range(1):
+            for w in range(1):
+                for ll in range(txt_seq_len):
+                    txt_ids[t, idx] = torch.tensor([t, h, w, ll], dtype=torch.int64)
+                    idx += 1
 
-    # txt_ids
-    txt_ids = torch.cartesian_prod(
-        torch.arange(1), torch.arange(1), torch.arange(1), torch.arange(txt_seq_len),
-    ).unsqueeze(0).expand(batch_size, -1, -1).to(device)
+    # Mask for spatial cache: 0=skip, 1=execute, 2=execute+update
+    # Shape: [batch_size, txt_seq_len + img_seq_len]
+    full_seq_len = txt_seq_len + img_seq_len
+    mask = torch.ones(batch_size, full_seq_len, dtype=torch.int32, device=device) * 2
 
-    timestep = torch.tensor([0.5], dtype=torch.float32, device=device)
-    guidance = torch.tensor([3.0], dtype=torch.float32, device=device) if guidance_embeds else None
-
-    return {
+    inputs = {
         "hidden_states": hidden_states,
         "encoder_hidden_states": encoder_hidden_states,
         "timestep": timestep,
         "img_ids": img_ids,
         "txt_ids": txt_ids,
-        "guidance": guidance,
+        "mask": mask,
     }
+    if guidance_embeds:
+        inputs["guidance"] = torch.tensor([3.0] * batch_size, dtype=torch.float32, device=device)
+    return inputs
 
 
 def export_transformer(
@@ -150,6 +179,7 @@ def export_transformer(
             "timestep": {0: "batch"},
             "img_ids": {0: "batch"},
             "txt_ids": {0: "batch"},
+            "mask": {0: "batch"},
         }
         print("\n[export] Fixed-shape export (seq_len not dynamic) — TensorRT compatible")
     else:
@@ -159,6 +189,7 @@ def export_transformer(
             "timestep": {0: "batch"},
             "img_ids": {0: "batch", 1: "img_seq_len"},
             "txt_ids": {0: "batch", 1: "txt_seq_len"},
+            "mask": {0: "batch", 1: "seq_len"},
         }
     if cfg.guidance_embeds:
         dynamic_axes["guidance"] = {0: "batch"}
@@ -183,9 +214,9 @@ def export_transformer(
                 dynamo=True,
             )
             if onnx_program is not None:
-                onnx_program.save(str(output_path))
+                onnx_program.save(str(output_path), save_as_external_data=True)
             print(f"[export] dynamo_export succeeded: {output_path}")
-        except Exception as e:
+        except (torch.onnx.errors.OnnxExporterError, RuntimeError, ImportError) as e:
             print(f"[export] dynamo_export failed: {e}")
             print("[export] Falling back to trace-based torch.onnx.export...")
             torch.onnx.export(
@@ -215,7 +246,7 @@ def main() -> int:
     parser.add_argument("--width", type=int, default=512)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--fixed-shapes", action="store_true",
-                        help="Disable dynamic axes (needed for TensorRT build)")
+                        help="Disable dynamic axes for sequence lengths (needed for TensorRT)")
     args = parser.parse_args()
 
     # Derive latent spatial dimensions from pixel dimensions.
